@@ -1,0 +1,214 @@
+
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LIVE CAMERA STREAM & PTZ CONTROL</title>
+    <!-- FontAwesome Icon -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: rgba(22, 31, 49, 0.75);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --accent-red: #ff3b30;
+            --accent-blue: #3b82f6;
+            --btn-bg: rgba(255, 255, 255, 0.06);
+            --btn-hover: rgba(59, 130, 246, 0.3);
+            --btn-active: #3b82f6;
+            --text-main: #f8fafc;
+            --text-sub: #94a3b8;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 12px;
+        }
+
+        .header {
+            width: 100%;
+            max-width: 640px;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+
+        .status-badge {
+            font-size: 0.75rem;
+            background: var(--accent-red);
+            color: #fff;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-weight: bold;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        /* 映像エリア (iframeでgo2rtcを直接読み込み) */
+        .video-container {
+            width: 100%;
+            max-width: 640px;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+            aspect-ratio: 16 / 9;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            margin-bottom: 16px;
+        }
+
+        .video-container iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        /* コントロールパネル */
+        .controls-card {
+            width: 100%;
+            max-width: 640px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 16px;
+            backdrop-filter: blur(10px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .panel-title {
+            font-size: 0.85rem;
+            color: var(--text-sub);
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* 十字キー配置 */
+        .dpad-container {
+            display: grid;
+            grid-template-columns: repeat(3, 60px);
+            grid-template-rows: repeat(3, 60px);
+            gap: 8px;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .dpad-btn {
+            background: var(--btn-bg);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            border-radius: 12px;
+            font-size: 1.2rem;
+            cursor: pointer;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transition: all 0.15s ease;
+            user-select: none;
+        }
+
+        .dpad-btn:hover {
+            background: var(--btn-hover);
+            border-color: var(--accent-blue);
+        }
+
+        .dpad-btn:active {
+            background: var(--btn-active);
+            transform: scale(0.95);
+        }
+
+        .btn-up { grid-column: 2; grid-row: 1; }
+        .btn-left { grid-column: 1; grid-row: 2; }
+        .btn-stop { grid-column: 2; grid-row: 2; color: var(--accent-red); }
+        .btn-right { grid-column: 3; grid-row: 2; }
+        .btn-down { grid-column: 2; grid-row: 3; }
+
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1><i class="fa-solid fa-video"></i> Argus PT LIVE</h1>
+        <span class="status-badge">● LIVE</span>
+    </div>
+
+    <!-- 1. 映像表示エリア: go2rtcの配信プレイヤーを直接埋め込み -->
+    <div class="video-container">
+        <iframe 
+            src="http://192.168.1.197:1984/stream.html?src=argus_pt" 
+            allow="autoplay; encrypted-media; picture-in-picture" 
+            allowfullscreen>
+        </iframe>
+    </div>
+
+    <!-- 2. PTZ操作パネル -->
+    <div class="controls-card">
+        <div class="panel-title"><i class="fa-solid fa-gamepad"></i> PTZ CONTROL</div>
+        <div class="dpad-container">
+            <button class="dpad-btn btn-up" onclick="moveCamera('up')" aria-label="上">
+                <i class="fa-solid fa-chevron-up"></i>
+            </button>
+            <button class="dpad-btn btn-left" onclick="moveCamera('left')" aria-label="左">
+                <i class="fa-solid fa-chevron-left"></i>
+            </button>
+            <button class="dpad-btn btn-stop" onclick="moveCamera('stop')" aria-label="停止">
+                <i class="fa-solid fa-square"></i>
+            </button>
+            <button class="dpad-btn btn-right" onclick="moveCamera('right')" aria-label="右">
+                <i class="fa-solid fa-chevron-right"></i>
+            </button>
+            <button class="dpad-btn btn-down" onclick="moveCamera('down')" aria-label="下">
+                <i class="fa-solid fa-chevron-down"></i>
+            </button>
+        </div>
+    </div>
+
+    <script>
+        function moveCamera(direction) {
+            // タッチデバイスでの応答性向上
+            if (navigator.vibrate) {
+                navigator.vibrate(20);
+            }
+
+            console.log('PTZ Command:', direction);
+
+            // Flask APIへPOSTリクエスト送信
+            fetch(`/ptz?dir=${direction}`, { method: 'POST' })
+            .then(res => {
+                if (!res.ok) console.warn('PTZ Error Status:', res.status);
+            })
+            .catch(err => console.error('PTZ Network Error:', err));
+        }
+    </script>
+</body>
+</html>
