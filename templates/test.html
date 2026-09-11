@@ -147,6 +147,19 @@
             transform: scale(0.95);
         }
 
+        .ptz-status {
+            margin-top: 12px;
+            min-height: 1.2em;
+            font-size: 0.8rem;
+            text-align: center;
+            line-height: 1.4;
+            max-width: 100%;
+            word-break: break-word;
+        }
+
+        .ptz-status.ok { color: var(--text-sub); }
+        .ptz-status.error { color: var(--accent-red); }
+
         .btn-up { grid-column: 2; grid-row: 1; }
         .btn-left { grid-column: 1; grid-row: 2; }
         .btn-stop { grid-column: 2; grid-row: 2; color: var(--accent-red); }
@@ -191,10 +204,23 @@
                 <i class="fa-solid fa-chevron-down"></i>
             </button>
         </div>
+        <div id="ptz-status" class="ptz-status" role="status" aria-live="polite"></div>
     </div>
 
     <script>
-        function moveCamera(direction) {
+        const statusEl = document.getElementById('ptz-status');
+        let statusTimer = null;
+
+        function showStatus(text, isError) {
+            statusEl.textContent = text;
+            statusEl.className = 'ptz-status' + (isError ? ' error' : ' ok');
+            clearTimeout(statusTimer);
+            if (!isError) {
+                statusTimer = setTimeout(() => { statusEl.textContent = ''; }, 1500);
+            }
+        }
+
+        async function moveCamera(direction) {
             // タッチデバイスでの応答性向上
             if (navigator.vibrate) {
                 navigator.vibrate(20);
@@ -202,12 +228,21 @@
 
             console.log('PTZ Command:', direction);
 
-            // Flask APIへPOSTリクエスト送信
-            fetch(`/ptz?dir=${direction}`, { method: 'POST' })
-            .then(res => {
-                if (!res.ok) console.warn('PTZ Error Status:', res.status);
-            })
-            .catch(err => console.error('PTZ Network Error:', err));
+            try {
+                const res = await fetch(`/ptz?dir=${direction}`, { method: 'POST' });
+                const data = await res.json().catch(() => ({}));
+                if (res.ok) {
+                    showStatus(`OK: ${data.sent || direction}`, false);
+                } else {
+                    // サーバーからの詳細なエラーメッセージを画面に表示する
+                    const msg = data.message || `HTTP ${res.status}`;
+                    console.warn('PTZ Error:', res.status, msg);
+                    showStatus(msg, true);
+                }
+            } catch (err) {
+                console.error('PTZ Network Error:', err);
+                showStatus(`ネットワークエラー: ${err.message}`, true);
+            }
         }
     </script>
 </body>
