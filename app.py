@@ -1,5 +1,6 @@
 import logging
 import os
+import socket
 
 from flask import Flask, jsonify, render_template, request
 import paho.mqtt.publish as publish
@@ -23,20 +24,66 @@ STREAM_URL = os.environ.get(
 )
 
 # MQTT ブローカー
+# 注意: Render 等のクラウドから使う場合、localhost / 192.168.x.x は到達できない。
+# 公開ブローカー (HiveMQ Cloud 等) か ngrok TCP トンネルのホスト名を指定すること。
 MQTT_BROKER = os.environ.get("MQTT_BROKER", "localhost")
 MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
 MQTT_TOPIC = os.environ.get("MQTT_TOPIC", "neolink/argus_pt/control/ptz")
 MQTT_USERNAME = os.environ.get("MQTT_USERNAME")
 MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD")
 MQTT_TLS = _env_flag("MQTT_TLS")
+MQTT_TIMEOUT = float(os.environ.get("MQTT_TIMEOUT", "5.0"))
 
 PTZ_AMOUNT = float(os.environ.get("PTZ_AMOUNT", "32.0"))
-PTZ_DIRECTIONS = {"up", "down", "left", "right"}
+PTZ_MOVES = {"up", "down", "left", "right"}
+PTZ_DIRECTIONS = PTZ_MOVES | {"stop"}
+
+
+def _is_private_host(host):
+    """localhost / プライベート IP かどうか (クラウドから到達不可の可能性が高い)"""
+    try:
+        addr = socket.gethostbyname(host)
+    except OSError:
+        return False
+    parts = addr.split(".")
+    if parts[0] == "127" or parts[0] == "10":
+        return True
+    if parts[0] == "192" and parts[1] == "168":
+        return True
+    if parts[0] == "172" and 16 <= int(parts[1]) <= 31:
+        return True
+    return False
 
 
 @app.route("/")
 def index():
     return render_template("test.html", stream_url=STREAM_URL)
+
+
+@app.route("/health")
+def health():
+    """設定の確認用。パスワードは返さない。"""
+    reachable = None
+    detail = None
+    try:
+        with socket.create_connection((MQTT_BROKER, MQTT_PORT), timeout=MQTT_TIMEOUT):
+            reachable = True
+    except OSError as e:
+        reachable = False
+        detail = str(e)
+
+    return jsonify(
+        {
+            "mqtt_broker": MQTT_BROKER,
+            "mqtt_port": MQTT_PORT,
+            "mqtt_topic": MQTT_TOPIC,
+            "mqtt_tls": MQTT_TLS,
+            "mqtt_auth": bool(MQTT_USERNAME),
+            "broker_reachable": reachable,
+            "broker_error": detail,
+            "broker_looks_private": _is_private_host(MQTT_BROKER),
+        }
+    )
 
 
 @app.route("/ptz", methods=["GET", "POST"])
@@ -55,12 +102,29 @@ def ptz_control():
             400,
         )
 
-    payload = f"{direction} {PTZ_AMOUNT}"
+    payload = direction if direction == "stop" else f"{direction} {PTZ_AMOUNT}"
     app.logger.info("MQTT publish: %s -> %s", MQTT_TOPIC, payload)
 
     auth = None
     if MQTT_USERNAME:
         auth = {"username": MQTT_USERNAME, "password": MQTT_PASSWORD}
+
+    # ブローカーに到達できない場合、publish.single は長時間ブロックすることがある。
+    # 先に短いタイムアウトで TCP 接続を確認し、原因が分かるエラーを返す。
+    try:
+        with socket.create_connection((MQTT_BROKER, MQTT_PORT), timeout=MQTT_TIMEOUT):
+            pass
+    except OSError as e:
+        hint = ""
+        if _is_private_host(MQTT_BROKER):
+            hint = (
+                " MQTT_BROKER がプライベートアドレスです。"
+                "クラウド (Render 等) からは LAN 内のブローカーに接続できません。"
+                "公開ブローカーか ngrok TCP トンネルを設定してください。"
+            )
+        msg = f"MQTT ブローカーに接続できません ({MQTT_BROKER}:{MQTT_PORT}): {e}.{hint}"
+        app.logger.error(msg)
+        return jsonify({"status": "error", "message": msg}), 502
 
     try:
         publish.single(
@@ -73,7 +137,7 @@ def ptz_control():
         )
     except Exception as e:
         app.logger.error("MQTT 送信エラー (%s:%s): %s", MQTT_BROKER, MQTT_PORT, e)
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({"status": "error", "message": str(e)}), 502
 
     return jsonify({"status": "success", "sent": payload})
 
