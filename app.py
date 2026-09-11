@@ -1,8 +1,10 @@
 import logging
 import os
 import socket
+import threading
 
 from flask import Flask, jsonify, render_template, request
+import paho.mqtt.client as mqtt
 import paho.mqtt.publish as publish
 
 app = Flask(__name__)
@@ -91,6 +93,47 @@ def _is_private_host(host):
     return False
 
 
+def _mqtt_probe():
+    """実際に MQTT CONNECT まで行い、認証エラーまで含めて判定する。
+
+    TCP 接続だけでは TLS や認証の失敗を検出できないため
+    (HiveMQ 等では資格情報の誤りが最も多い)、CONNACK を確認する。
+    戻り値: (ok, detail)
+    """
+    client = mqtt.Client()
+    if MQTT_USERNAME:
+        client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+    if MQTT_TLS:
+        client.tls_set()
+
+    done = threading.Event()
+    state = {}
+
+    def on_connect(_client, _userdata, _flags, rc):
+        state["rc"] = rc
+        done.set()
+
+    client.on_connect = on_connect
+
+    try:
+        client.connect(MQTT_BROKER, MQTT_PORT, keepalive=10)
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+    try:
+        client.loop_start()
+        if not done.wait(MQTT_TIMEOUT):
+            return False, "CONNACK タイムアウト"
+        rc = state.get("rc")
+        return rc == 0, mqtt.connack_string(rc)
+    finally:
+        try:
+            client.loop_stop()
+            client.disconnect()
+        except Exception:
+            pass
+
+
 @app.route("/")
 def index():
     return render_template("test.html", stream_url=STREAM_URL)
@@ -99,14 +142,19 @@ def index():
 @app.route("/health")
 def health():
     """設定の確認用。パスワードは返さない。"""
-    reachable = None
-    detail = None
+    tcp_ok = None
+    tcp_error = None
     try:
         with socket.create_connection((MQTT_BROKER, MQTT_PORT), timeout=MQTT_TIMEOUT):
-            reachable = True
+            tcp_ok = True
     except OSError as e:
-        reachable = False
-        detail = str(e)
+        tcp_ok = False
+        tcp_error = str(e)
+
+    # TCP が通っていても TLS / 認証で弾かれることがあるので CONNECT まで確認する
+    mqtt_ok, mqtt_detail = (False, "TCP 接続不可のため未実施")
+    if tcp_ok:
+        mqtt_ok, mqtt_detail = _mqtt_probe()
 
     return jsonify(
         {
@@ -115,8 +163,10 @@ def health():
             "mqtt_topic": MQTT_TOPIC,
             "mqtt_tls": MQTT_TLS,
             "mqtt_auth": bool(MQTT_USERNAME),
-            "broker_reachable": reachable,
-            "broker_error": detail,
+            "tcp_reachable": tcp_ok,
+            "tcp_error": tcp_error,
+            "mqtt_connect_ok": mqtt_ok,
+            "mqtt_connect_detail": mqtt_detail,
             "broker_looks_private": _is_private_host(MQTT_BROKER),
         }
     )
