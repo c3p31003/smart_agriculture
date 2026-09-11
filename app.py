@@ -23,11 +23,47 @@ STREAM_URL = os.environ.get(
     "https://sneezing-modify-observing.ngrok-free.dev/stream.html?src=argus_pt",
 )
 
+def _parse_broker(raw, default_port):
+    """MQTT_BROKER を (host, port) に分解する。
+
+    ngrok は 'tcp://0.tcp.ngrok.io:12345' 形式で表示するため、そのまま
+    貼り付けられても動くようにスキーム / ポートを取り除く。
+    ポートが含まれていればそちらを優先する。
+    """
+    host = (raw or "").strip()
+    port = default_port
+
+    for scheme in ("tcp://", "mqtt://", "mqtts://", "ssl://"):
+        if host.lower().startswith(scheme):
+            host = host[len(scheme):]
+            break
+
+    host = host.rstrip("/")
+
+    # host:port (IPv6 の '[::1]:1883' も考慮)
+    if host.startswith("["):
+        end = host.find("]")
+        if end != -1:
+            rest = host[end + 1:]
+            hostpart = host[1:end]
+            if rest.startswith(":") and rest[1:].isdigit():
+                return hostpart, int(rest[1:])
+            return hostpart, port
+    elif host.count(":") == 1:
+        hostpart, _, portpart = host.partition(":")
+        if portpart.isdigit():
+            return hostpart, int(portpart)
+
+    return host, port
+
+
 # MQTT ブローカー
 # 注意: Render 等のクラウドから使う場合、localhost / 192.168.x.x は到達できない。
 # 公開ブローカー (HiveMQ Cloud 等) か ngrok TCP トンネルのホスト名を指定すること。
-MQTT_BROKER = os.environ.get("MQTT_BROKER", "localhost")
-MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
+MQTT_BROKER, MQTT_PORT = _parse_broker(
+    os.environ.get("MQTT_BROKER", "localhost"),
+    int(os.environ.get("MQTT_PORT", "1883")),
+)
 MQTT_TOPIC = os.environ.get("MQTT_TOPIC", "neolink/argus_pt/control/ptz")
 MQTT_USERNAME = os.environ.get("MQTT_USERNAME")
 MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD")
